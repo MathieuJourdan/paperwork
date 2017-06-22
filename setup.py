@@ -96,7 +96,7 @@ Main features are:
         # documentation
         ('paperwork/frontend/doc', glob.glob('doc/*.pdf')),
 
-        ('share/applications', ['data/paperwork.desktop']),
+        ('share/applications', ['data/org.gnome.Paperwork.desktop']),
     ] + data_files,
     entry_points={
         'gui_scripts': [

@@ -6,9 +6,6 @@
     "sdk": "org.gnome.Sdk",
     "command": "paperwork",
     "copy-icon": true,
-    "rename-icon": "paperwork",
-    "rename-desktop-file": "paperwork.desktop",
-    "desktop-file-name-prefix": "",
     "finish-args": [
       "--share=ipc",
       "--share=network",
