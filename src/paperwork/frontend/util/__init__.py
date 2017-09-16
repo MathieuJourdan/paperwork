@@ -15,10 +15,10 @@
 #    You should have received a copy of the GNU General Public License
 #    along with Paperwork.  If not, see <http://www.gnu.org/licenses/>.
 
-import glob
 import locale
 import logging
 import os
+import sys
 
 import heapq
 import gettext
@@ -28,14 +28,13 @@ from gi.repository import Gtk
 
 from pkg_resources import resource_filename
 
-if os.name == "nt":
-    import webbrowser
-    from xml.etree import ElementTree
-
 import PIL.Image
 
 from .actions import SimpleAction
 
+if os.name == "nt":
+    import webbrowser
+    from xml.etree import ElementTree
 
 _ = gettext.gettext
 logger = logging.getLogger(__name__)
@@ -86,7 +85,7 @@ def fix_widgets(widget_tree):
             )
 
 
-def _get_resource_path(filename):
+def _get_resource_path(filename, pkg="paperwork.frontend"):
     """
     Gets the absolute location of a datafile located within the package
     (paperwork.frontend).
@@ -103,15 +102,24 @@ def _get_resource_path(filename):
         Exception -- if the file is not found.
 
     """
-    path = resource_filename('paperwork.frontend', filename)
+    for dirpath in ["data", "doc"]:
+        path = os.path.join(dirpath, filename)
+        if os.path.exists(path):
+            return path
+
+    if getattr(sys, 'frozen', False):
+        path = os.path.join(sys._MEIPASS, "data", filename)
+        if os.path.exists(path):
+            return path
+
+    path = resource_filename(pkg, filename)
 
     if not os.access(path, os.R_OK):
-        raise FileNotFoundEroor(
+        raise FileNotFoundError(  # NOQA (Python 3.x only)
             "Can't find resource file '%s'. Aborting" % filename
         )
 
     logger.debug("For filename '%s' got file '%s'", filename, path)
-
     return path
 
 
@@ -177,12 +185,48 @@ _SIZEOF_FMT_STRINGS = [
 ]
 
 
-def load_image(filename):
+def load_image(filename, pkg="paperwork.frontend.data"):
     """
     Load an image from Paperwork data
     """
-    img = _get_resource_path(filename)
+    img = _get_resource_path(filename, pkg=pkg)
     return PIL.Image.open(img)
+
+
+def preload_file(filename, pkg="paperwork.frontend.data"):
+    """
+    Just make sure Python make the file available to other elements (Gtk
+    for instance)
+    """
+    try:
+        return _get_resource_path(filename, pkg=pkg)
+    except FileNotFoundError:  # NOQA (Python 3.x only)
+        logger.warning("Failed to preload '%s' !", filename)
+        return None
+
+
+def get_locale_dirs():
+    locale_dirs = [
+        "."
+    ]
+
+    # Pyinstaller support
+    if getattr(sys, 'frozen', False):
+        locale_dirs.append(os.path.join(sys._MEIPASS, "share"))
+
+    # use the french locale file for reference
+    try:
+        path = resource_filename(
+            'paperwork.frontend',
+            os.path.join("locale", "fr", "LC_MESSAGES")
+        )
+        for _ in range(0, 3):
+            path = os.path.dirname(path)
+        locale_dirs.append(path)
+    except Exception as exc:
+        logger.warning("Failed to locate locales !", exc_info=exc)
+
+    return locale_dirs
 
 
 def get_documentation(doc_name):
@@ -190,8 +234,6 @@ def get_documentation(doc_name):
     Return the path to a documentation PDF.
     Try to match the user language.
     """
-    DOC_SUBDIR = "doc"
-
     lang = "en"
     try:
         lang = locale.getdefaultlocale()[0][:2]
@@ -202,16 +244,15 @@ def get_documentation(doc_name):
         )
         pass
 
-    default = os.path.join(DOC_SUBDIR, doc_name + ".pdf")
-    localized = os.path.join(DOC_SUBDIR,
-                             "{}_{}.pdf".format(doc_name, lang))
+    default = doc_name + ".pdf"
+    localized = "{}_{}.pdf".format(doc_name, lang)
     try:
-        return _get_resource_path(localized)
+        return _get_resource_path(localized, pkg="paperwork.frontend.doc")
     except:
         pass
 
     try:
-        return _get_resource_path(default)
+        return _get_resource_path(default, pkg="paperwork.frontend.doc")
     except:
         pass
 
@@ -220,7 +261,9 @@ def get_documentation(doc_name):
     if os.path.exists(default):
         return default
 
-    raise FileNotFoundError("Documentation {} not found !".format(doc_name))
+    raise FileNotFoundError(  # NOQA (Python 3.x only)
+        "Documentation {} not found !".format(doc_name)
+    )
 
 
 def sizeof_fmt(num):

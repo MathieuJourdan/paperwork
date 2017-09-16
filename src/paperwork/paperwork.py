@@ -31,32 +31,25 @@ gi.require_version('Poppler', '0.18')
 gi.require_version('PangoCairo', '1.0')
 
 from gi.repository import GLib
-from gi.repository import Gtk
 from gi.repository import Notify
 import locale
 import logging
 import signal
+import argparse
 
 import pyinsane2
 
 from .frontend.diag import LogTracker
-from .frontend.mainwindow import ActionRealQuit
-from .frontend.mainwindow import ActionRefreshIndex
+from .frontend.mainwindow import ActionRealQuit, __version__
 from .frontend.mainwindow import MainWindow
+from .frontend.util import get_locale_dirs
 from .frontend.util.config import load_config
 
 logger = logging.getLogger(__name__)
 
 PREFIX = os.environ.get('VIRTUAL_ENV', '/usr')
 
-LOCALE_PATHS = []
-if getattr(sys, 'frozen', False):
-    LOCALE_PATHS += [os.path.join(sys._MEIPASS, "share")]
-LOCALE_PATHS += [
-    '.',
-    PREFIX + '/local/share/',
-    PREFIX + '/share/',
-]
+LOCALE_PATHS = get_locale_dirs()
 
 
 def set_locale_windows(locales_dir):
@@ -134,7 +127,21 @@ class Main(object):
         """
         Where everything start.
         """
+        parser = argparse.ArgumentParser(
+            description='Manages scanned documents and PDFs'
+        )
+        parser.add_argument('--version', action='version',
+                            version=str(__version__))
+        parser.add_argument(
+            "--debug", "-d", default=os.getenv("PAPERWORK_VERBOSE", "INFO"),
+            choices=LogTracker.LOG_LEVELS.keys(),
+            help="Set verbosity level. Can also be set via env"
+            " PAPERWORK_VERBOSE (e.g. export PAPERWORK_VERBOSE=INFO)"
+        )
+        args, unknown_args = parser.parse_known_args(sys.argv[1:])
+
         LogTracker.init()
+        logging.getLogger().setLevel(LogTracker.LOG_LEVELS.get(args.debug))
 
         set_locale()
 
@@ -153,18 +160,13 @@ class Main(object):
             self.config = load_config()
             self.config.read()
 
-            self.main_win = MainWindow(self.config, self.main_loop)
-            ActionRefreshIndex(self.main_win, self.config,
-                               skip_examination=skip_workdir_scan).do()
-
+            self.main_win = MainWindow(
+                self.config, self.main_loop, not skip_workdir_scan
+            )
             if hook_func:
                 hook_func(self.config, self.main_win)
 
             self.main_loop.run()
-
-            logger.info("Stopping schedulers ...")
-            for scheduler in self.main_win.schedulers.values():
-                scheduler.stop()
 
             logger.info("Writing configuration ...")
             self.config.write()

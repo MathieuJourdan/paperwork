@@ -1,9 +1,59 @@
 #!/usr/bin/env python
 
-import glob
 import os
 
 from setuptools import setup, find_packages
+
+LOCALES = [
+    "de",
+    "fr",
+    "uk",
+]
+
+ICON_SIZES = [
+    16,
+    22,
+    24,
+    30,
+    32,
+    36,
+    42,
+    48,
+    50,
+    64,
+    72,
+    96,
+    100,
+    128,
+    150,
+    160,
+    192,
+    256,
+    512,
+]
+
+DOC_PATHS = [
+    "doc/hacking.pdf",
+    "doc/intro_fr.pdf",
+    "doc/intro.pdf",
+    "doc/translating.pdf",
+    "doc/usage.pdf",
+]
+
+packages = find_packages('src') + [
+    'paperwork.frontend.doc',
+]
+package_dir = {
+    '': 'src',
+    'paperwork.frontend.doc': 'doc',
+}
+package_data = {
+    'paperwork.frontend': [
+        'data/paperwork.svg',
+        'data/paperwork_halo.svg',
+    ],
+    'paperwork.frontend.doc': DOC_PATHS,
+}
 
 extra_deps = []
 
@@ -12,16 +62,21 @@ if os.name == "nt":
         "pycrypto"  # used to check the activation keys
     ]
 
-data_files = []
-
 # include icons
-for icon_dirpath in glob.glob('data/[0-9][0-9]*'):
-    icon_path = os.path.join(icon_dirpath, 'paperwork.png')
-    if os.path.exists(icon_path):
-        size = os.path.basename(icon_dirpath)
-        data_files.append(
-            ('share/icons/hicolor/{}/apps'.format(size), [icon_path])
-        )
+packages.append("paperwork.frontend.data")
+package_dir['paperwork.frontend.data'] = 'data'
+for size in ICON_SIZES:
+    icon_path = os.path.join("data", 'paperwork_{}.png'.format(size))
+    package_data['paperwork.frontend.data'] = [icon_path]
+
+# include locales
+for locale in LOCALES:
+    mo_dir = os.path.join("locale", locale, "LC_MESSAGES")
+    mo = os.path.join(mo_dir, "paperwork.mo")
+    pkg = "paperwork.frontend.locale.{}.LC_MESSAGES".format(locale)
+    packages.append(pkg)
+    package_dir[pkg] = mo_dir
+    package_data[pkg] = [mo]
 
 setup(
     name="paperwork",
@@ -37,7 +92,7 @@ setup(
     # * update the public key in
     #   src/paperwork/frontend/activation/__init__.py:check_activation_key()
     #   if required
-    version="1.2",
+    version="1.3",
     description=(
         "Using scanner and OCR to grep dead trees the easy way (Linux only)"
     ),
@@ -63,7 +118,7 @@ Main features are:
     keywords="scanner ocr gui",
     url="https://github.com/jflesch/paperwork",
     download_url=("https://github.com/jflesch/paperwork"
-                  "/archive/1.2.tar.gz"),
+                  "/archive/1.3.tar.gz"),
     classifiers=[
         "Development Status :: 5 - Production/Stable",
         "Environment :: X11 Applications :: GTK",
@@ -82,8 +137,9 @@ Main features are:
     license="GPLv3+",
     author="Jerome Flesch",
     author_email="jflesch@openpaper.work",
-    packages=find_packages('src'),
-    package_dir={'': 'src'},
+    packages=packages,
+    package_dir=package_dir,
+    package_data=package_data,
     include_package_data=True,
     data_files=[
         ('share/icons/hicolor/scalable/apps',
@@ -111,8 +167,9 @@ Main features are:
         "pyinsane2",
         "pyocr >= 0.3.0",
         "pypillowfight",
+        "pyxdg >= 0.25",
         "termcolor",  # used by paperwork-chkdeps
-        "paperwork-backend >= 1.2",
+        "paperwork-backend >= 1.3",
         # paperwork-chkdeps take care of all the dependencies that can't be
         # handled here. For instance:
         # - Dependencies using gobject introspection
@@ -124,8 +181,14 @@ Main features are:
 print("============================================================")
 print("============================================================")
 print("||                       IMPORTANT                        ||")
-print("|| Please run 'paperwork-shell chkdeps paperwork_backend' ||")
-print("||        and 'paperwork-shell chkdeps paperwork'         ||")
-print("||        to find any missing dependency                  ||")
+print("||                                                        ||")
+print("||                       Please run                       ||")
+print("||--------------------------------------------------------||")
+print("||          paperwork-shell chkdeps paperwork_backend     ||")
+print("||             paperwork-shell chkdeps paperwork          ||")
+print("||                  paperwork-shell install               ||")
+print("||--------------------------------------------------------||")
+print("||             to find any missing dependencies           ||")
+print("||       and install Paperwork's icons and shortcuts      ||")
 print("============================================================")
 print("============================================================")

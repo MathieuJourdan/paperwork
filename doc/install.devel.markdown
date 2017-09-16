@@ -25,6 +25,9 @@ $ cd paperwork
 $ git checkout unstable  # or 'testing'
 $ sudo python3 ./setup.py install
 $ paperwork-shell chkdeps paperwork
+
+# if you want to add it in the menus
+$ paperwork-shell install
 ```
 
 (see [the wiki as to why you probably want to work on the branch 'unstable'](https://github.com/jflesch/paperwork/wiki/Branches))

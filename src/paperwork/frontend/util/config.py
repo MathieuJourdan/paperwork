@@ -14,12 +14,12 @@
 #    You should have received a copy of the GNU General Public License
 #    along with Paperwork.  If not, see <http://www.gnu.org/licenses/>.
 
+import base64
 import configparser
 import datetime
 import logging
 import uuid
 
-import pyocr
 import pyinsane2
 
 from paperwork_backend.config import PaperworkConfig
@@ -30,7 +30,6 @@ from paperwork_backend.util import find_language
 
 logger = logging.getLogger(__name__)
 DEFAULT_CALIBRATION_RESOLUTION = 200
-DEFAULT_OCR_LANG = "eng"  # if really we can't guess anything
 RECOMMENDED_SCAN_RESOLUTION = 300
 
 
@@ -218,37 +217,58 @@ class _PaperworkSize(object):
         config.set(self.section, self.base_token + "_h", str(self.value[1]))
 
 
-class _PaperworkFrontendConfigUtil(object):
-    @staticmethod
-    def get_default_ocr_lang():
-        # Try to guess based on the system locale what would be
-        # the best OCR language
+class _PaperworkRecent(object):
+    def __init__(self, section, base_token, max_length=10):
+        self.section = section
+        self.base_token = base_token
+        self.max_length = max_length
+        self.value = []
 
-        ocr_tools = pyocr.get_available_tools()
-        if len(ocr_tools) == 0:
-            return DEFAULT_OCR_LANG
-        ocr_langs = ocr_tools[0].get_available_languages()
+    def push(self, value):
+        value = value.strip()
+        if value == "":
+            return
+        if value in self.value:
+            # duplicates are useless
+            return
+        self.value.append(value)
+        if len(self.value) > self.max_length:
+            self.value.pop(0)
 
-        lang = find_language()
-        if hasattr(lang, 'iso639_3_code') and lang.iso639_3_code in ocr_langs:
-            return lang.iso639_3_code
-        if hasattr(lang, 'terminology') and lang.terminology in ocr_langs:
-            return lang.terminology
-        return DEFAULT_OCR_LANG
+    def load(self, config):
+        self.value = []
+        try:
+            idx = 0
+            while True:
+                v = config.get(self.section, self.base_token + "_" + str(idx))
+                v = v.encode("utf-8")
+                v = base64.decodebytes(v)
+                v = v.decode("utf-8")
+                self.push(v)
+                idx += 1
+        except (configparser.NoSectionError, configparser.NoOptionError):
+            pass
 
-    @staticmethod
-    def get_default_spellcheck_lang(ocr_lang):
-        ocr_lang = ocr_lang.value
-        if ocr_lang is None:
-            return None
+    def update(self, config):
+        for (idx, v) in enumerate(self.value):
+            v = v.encode("utf-8")
+            v = base64.encodebytes(v).strip()
+            v = v.decode("utf-8")
+            config.set(self.section, self.base_token + "_" + str(idx), v)
 
-        # Try to guess the lang based on the ocr lang
-        lang = find_language(ocr_lang)
-        if hasattr(lang, 'iso639_1_code'):
-            return lang.iso639_1_code
-        if hasattr(lang, 'alpha2'):
-            return lang.alpha2
-        return lang.alpha_2
+
+def get_default_spellcheck_lang(ocr_lang):
+    ocr_lang = ocr_lang.value
+    if ocr_lang is None:
+        return None
+
+    # Try to guess the lang based on the ocr lang
+    lang = find_language(ocr_lang)
+    if hasattr(lang, 'iso639_1_code'):
+        return lang.iso639_1_code
+    if hasattr(lang, 'alpha2'):
+        return lang.alpha2
+    return lang.alpha_2
 
 
 def load_config():
@@ -258,10 +278,6 @@ def load_config():
         'main_win_size': _PaperworkSize("GUI", "main_win_size"),
         'ocr_enabled': PaperworkSetting("OCR", "Enabled", lambda: True,
                                         paperwork_cfg_boolean),
-        'ocr_lang': PaperworkSetting(
-            "OCR", "Lang",
-            _PaperworkFrontendConfigUtil.get_default_ocr_lang
-        ),
         'result_sorting': PaperworkSetting(
             "GUI", "Sorting", lambda: "scan_date"
         ),
@@ -309,20 +325,23 @@ def load_config():
         ),
         'uuid': PaperworkSetting(
             "Statistics", "uuid", lambda: uuid.getnode(), int
-        )
+        ),
+
+        # recents
+        'last_documents': _PaperworkRecent("recent", "documents", 3),
+        'last_searches': _PaperworkRecent("recent", "search", 10),
     }
-    ocr_lang = _PaperworkFrontendConfigUtil.get_default_spellcheck_lang
+
+    ocr_lang = get_default_spellcheck_lang
     settings['spelling_lang'] = (
         PaperworkSetting("SpellChecking", "Lang",
-                         lambda: ocr_lang(settings['ocr_lang']))
+                         lambda: ocr_lang(config.settings['ocr_lang']))
     )
     settings['langs'] = (
-        _PaperworkLangs(settings['ocr_lang'], settings['spelling_lang'])
+        _PaperworkLangs(config.settings['ocr_lang'], settings['spelling_lang'])
     )
 
-    for (k, v) in settings.items():
-        config.settings[k] = v
-
+    config.settings.update(settings)
     return config
 
 

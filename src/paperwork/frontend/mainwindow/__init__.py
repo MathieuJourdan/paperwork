@@ -18,10 +18,13 @@
 import gc
 import logging
 import os
-import sys
 import threading
 
 import gettext
+
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('Notify', '0.7')
 from gi.repository import Gdk
 from gi.repository import GdkPixbuf
 from gi.repository import GLib
@@ -64,11 +67,13 @@ from ..util import get_documentation
 from ..util import load_cssfile
 from ..util import load_image
 from ..util import load_uifile
+from ..util import preload_file
 from ..util import sizeof_fmt
 from ..util.actions import SimpleAction
 from ..util.config import get_scanner
 from ..util.dialog import ask_confirmation
 from ..util.dialog import popup_no_scanner_found
+from ..util.dialog import show_msg
 from ..util.canvas import Canvas
 from ..util.canvas.animations import SpinnerAnimation
 from ..util.canvas.drawers import Centerer
@@ -85,7 +90,7 @@ _ = gettext.gettext
 logger = logging.getLogger(__name__)
 
 
-__version__ = '1.2-git'
+__version__ = '1.3-git'
 
 
 # during tests, we have multiple instatiations of MainWindow(), but we must
@@ -387,7 +392,7 @@ class JobIndexUpdater(Job):
         # update is finished
         self.__condition.acquire()
         GLib.idle_add(self.__wakeup)
-        self.__condition.wait()
+        self.__condition.wait(3.0)
         self.__condition.release()
 
     def do(self):
@@ -406,6 +411,7 @@ class JobIndexUpdater(Job):
                 optimize=self.optimize)
 
         if not self.can_run:
+            logger.warning("Index update interrupted")
             self.emit('index-update-interrupted')
             return
 
@@ -422,6 +428,7 @@ class JobIndexUpdater(Job):
             try:
                 while True:
                     if not self.can_run:
+                        logger.warning("Index update interrupted")
                         self.emit('index-update-interrupted')
                         return
                     doc = doc_bunch.pop()
@@ -858,6 +865,7 @@ class JobImporter(Job):
         'import-ok': (GObject.SignalFlags.RUN_LAST, None,
                       (GObject.TYPE_PYOBJECT,
                        GObject.TYPE_PYOBJECT,
+                       GObject.TYPE_PYOBJECT,
                        )),
     }
 
@@ -1041,7 +1049,11 @@ class JobImporter(Job):
                 self.__main_win, iter(new_doc_pages), must_add_labels=True
             ).start()
 
-        self.emit('import-ok', import_result.stats, import_result.select_doc)
+        self.emit(
+            'import-ok',
+            import_result.stats, import_result.select_doc,
+            import_result.imported_file_uris
+        )
 
 
 GObject.type_register(JobImporter)
@@ -1498,7 +1510,7 @@ class ActionImport(SimpleAction):
 
         filters = []
         for importer in docimport.IMPORTERS:
-            mimes = importer.get_mimetypes()
+            mimes = importer.get_select_mime_types()
             for (name, mime) in mimes:
                 all_mimes.append(mime)
                 ffilter = Gtk.FileFilter()
@@ -1547,10 +1559,12 @@ class ActionImport(SimpleAction):
             importer_list.append([str(importer), importer])
 
         response = dialog.run()
-        if not response:
+        active_idx = combobox.get_active()
+
+        dialog.destroy()
+        if response <= 0:
             raise Exception("Import cancelled by user")
 
-        active_idx = combobox.get_active()
         return importer_list[active_idx][1]
 
     def __no_importer(self, file_uris):
@@ -1622,7 +1636,7 @@ class ActionImport(SimpleAction):
     def _delete_files(self, notification, action, file_uris=[],
                       *args, **kwargs):
         self.notification = None
-        logger.info("Moving importing file(s) to trash ...")
+        logger.info("Moving imported file(s) to trash ...")
         GLib.idle_add(self.__delete_files, file_uris)
 
     def __delete_files(self, file_uris=[]):
@@ -1668,7 +1682,7 @@ class ActionImport(SimpleAction):
             self.__no_importer(file_uris)
             return
         elif len(importers) > 1:
-            importer = self.__select_importers(importers)
+            importer = self.__select_importer(importers)
         else:
             importer = importers[0]
 
@@ -1682,8 +1696,8 @@ class ActionImport(SimpleAction):
         )
         job_importer.connect(
             'import-ok',
-            lambda _, stats, doc: GLib.idle_add(self.__import_ok, stats,
-                                                file_uris)
+            lambda _, stats, doc, uris: GLib.idle_add(self.__import_ok, stats,
+                                                      uris)
         )
         self.__main_win.schedulers['main'].schedule(job_importer)
 
@@ -1712,7 +1726,6 @@ class ActionDeletePage(SimpleAction):
         logger.info("Deleting ...")
         page.destroy()
         logger.info("Deleted")
-        doc.drop_cache()
         self.__main_win.page = None
         set_widget_state(self.__main_win.need_page_widgets, False)
         if len(doc.pages) > 0:
@@ -2256,6 +2269,19 @@ class ActionOpenActivation(SimpleAction):
         self.diag.show()
 
 
+class ActionOpenSummary(SimpleAction):
+    """
+    Quit
+    """
+    def __init__(self, main_window):
+        SimpleAction.__init__(self, "Open summary")
+        self.__main_win = main_window
+
+    def do(self):
+        SimpleAction.do(self)
+        self.__main_win.switch_mainview("summary")
+
+
 class ActionAbout(SimpleAction):
     def __init__(self, main_window):
         SimpleAction.__init__(self, "Opening about dialog")
@@ -2264,7 +2290,7 @@ class ActionAbout(SimpleAction):
 
     def do(self):
         SimpleAction.do(self)
-        self.diag = AboutDialog(self.__main_win.window)
+        self.diag = AboutDialog(self.__main_win.window, __version__)
         self.diag.show()
 
 
@@ -2300,6 +2326,15 @@ class ActionRealQuit(SimpleAction):
         GLib.idle_add(self.__actual_quit)
 
     def __actual_quit(self):
+        logger.info("Saving configuration ...")
+        self.__config.write()
+
+        # We must stop the schedulers before anything else because jobs
+        # may need the Gtk loop or other services to stop correctly
+        logger.info("Stopping schedulers ...")
+        for scheduler in self.__main_win.schedulers.values():
+            scheduler.stop()
+
         logger.info("Stopping index client ...")
         self.__main_win.docsearch.stop()
         logger.info("Gtk.main_quit() ...")
@@ -2495,7 +2530,7 @@ class SearchBar(object):
 
         accelerators = [
             ('F3', 'clicked', next_occ),
-            ('<Primary>F3', 'clicked', previous_occ),
+            ('<Shift>F3', 'clicked', previous_occ),
         ]
         accel_group = Gtk.AccelGroup()
         for (shortcut, signame, widget) in accelerators:
@@ -2600,9 +2635,12 @@ class SearchBar(object):
 
 
 class MainWindow(object):
-    def __init__(self, config, main_loop):
+    def __init__(self, config, main_loop, workdir_scan=True):
+        self.__config = config
+
         self.ready = False
         self.docsearch = DummyDocSearch()
+        self.workdir_scan_at_start = workdir_scan
 
         self.version = __version__
 
@@ -2631,7 +2669,9 @@ class MainWindow(object):
         load_cssfile("application.css")
 
         widget_tree = load_uifile(
-            os.path.join("mainwindow", "mainwindow.glade"))
+            os.path.join("mainwindow", "mainwindow.glade")
+        )
+        summary_tree = load_uifile(os.path.join("mainwindow", "summary.glade"))
         # self.widget_tree is for tests/screenshots ONLY
         self.widget_tree = widget_tree
 
@@ -2681,6 +2721,8 @@ class MainWindow(object):
             'search': self.search_field,
         }
 
+        self.global_page_box = widget_tree.get_object("globalPageBox")
+
         img_scrollbars = widget_tree.get_object("scrolledwindowPageImg")
         img_widget = Canvas(img_scrollbars)
         img_widget.set_visible(True)
@@ -2725,6 +2767,12 @@ class MainWindow(object):
         self.img['canvas'].add_drawer(self.page_drop_handler)
         self.page_drop_handler.set_enabled(self.doc.can_edit)
 
+        self.summary = {
+            "view": summary_tree.get_object("summary_view"),
+        }
+
+        self.active_view = "content"
+
         self.popovers = {
             'view_settings': widget_tree.get_object("view_settings_popover"),
         }
@@ -2738,15 +2786,38 @@ class MainWindow(object):
             'right': widget_tree.get_object("headerbar_right"),
         }
 
+        self.search_box = widget_tree.get_object("box_search")
+
         self.left_revealers = {
+            'loading': [
+                (
+                    widget_tree.get_object("box_left_revealers"), 0,
+                    widget_tree.get_object("box_left_loading_revealer"),
+                ),
+                (
+                    widget_tree.get_object("box_headerbar_left"), 0,
+                    widget_tree.get_object("box_left_headerbar_loading_revealer")
+                ),
+            ],
             'doc_list': [
-                widget_tree.get_object("box_left_doclist_revealer"),
-                widget_tree.get_object("box_headerbar_left_doclist_revealer"),
+                (
+                    widget_tree.get_object("box_left_revealers"), 1,
+                    widget_tree.get_object("box_left_doclist_revealer")
+                ),
+                (
+                    widget_tree.get_object("box_headerbar_left"), 1,
+                    widget_tree.get_object("box_headerbar_left_doclist_revealer")
+                ),
             ],
             'doc_properties': [
-                widget_tree.get_object("box_left_docproperties_revealer"),
-                widget_tree.get_object(
-                    "box_headerbar_left_docproperties_revealer"),
+                (
+                    widget_tree.get_object("box_left_revealers"), 2,
+                    widget_tree.get_object("box_left_docproperties_revealer")
+                ),
+                (
+                    widget_tree.get_object("box_headerbar_left"), 2,
+                    widget_tree.get_object("box_headerbar_left_docproperties_revealer")
+                ),
             ],
         }
 
@@ -2755,7 +2826,6 @@ class MainWindow(object):
             'total': widget_tree.get_object("labelTotalPages"),
         }
 
-        self.global_page_box = widget_tree.get_object("globalPageBox")
         self.export = {
             'dialog': None,
             'exporter': None,
@@ -2834,24 +2904,6 @@ class MainWindow(object):
                 ],
                 ActionImport(self, config)
             ),
-            'print': (
-                [
-                    gactions['print'],
-                ],
-                ActionPrintDoc(self)
-            ),
-            'open_export_doc_dialog': (
-                [
-                    gactions['export_doc'],
-                ],
-                ActionOpenExportDocDialog(self)
-            ),
-            'open_export_page_dialog': (
-                [
-                    gactions['export_page'],
-                ],
-                ActionOpenExportPageDialog(self)
-            ),
             'open_settings': (
                 [
                     gactions['open_settings'],
@@ -2882,17 +2934,17 @@ class MainWindow(object):
                 ],
                 ActionOpenHelp(self, "hacking")
             ),
+            'open_summary': (
+                [
+                    gactions['summary'],
+                ],
+                ActionOpenSummary(self)
+            ),
             'quit': (
                 [
                     gactions['quit'],
                 ],
                 ActionQuit(self, config),
-            ),
-            'open_doc_dir': (
-                [
-                    gactions['open_doc_dir']
-                ],
-                ActionOpenDocDir(self),
             ),
             'optimize_index': (
                 [
@@ -2930,12 +2982,6 @@ class MainWindow(object):
                 ],
                 ActionToggleAllBoxes(self)
             ),
-            'redo_ocr_doc': (
-                [
-                    gactions['redo_ocr_doc'],
-                ],
-                ActionRedoDocOCR(self),
-            ),
             'redo_ocr_all': (
                 [
                     gactions['redo_ocr_all'],
@@ -2951,6 +2997,10 @@ class MainWindow(object):
             'reindex': (
                 [],
                 ActionRefreshIndex(self, config, force=False),
+            ),
+            'reload': (
+                [],
+                ActionRefreshIndex(self, config, force=False, skip_examination=True),
             ),
             'diagnostic': (
                 [
@@ -2990,17 +3040,11 @@ class MainWindow(object):
         self.window.add_events(Gdk.EventMask.KEY_PRESS_MASK)
 
         self.need_doc_widgets = set(
-            self.actions['print'][0] +
-            self.actions['open_doc_dir'][0] +
-            self.actions['redo_ocr_doc'][0] +
-            self.actions['open_export_doc_dialog'][0] +
             self.actions['set_current_page'][0] +
             self.actions['open_view_settings'][0]
         )
 
-        self.need_page_widgets = set(
-            self.actions['open_export_page_dialog'][0]
-        )
+        self.need_page_widgets = set()
 
         self.__show_all_boxes_widget = \
             self.actions['show_all_boxes'][0][0]
@@ -3038,12 +3082,13 @@ class MainWindow(object):
         self.window.connect(
             "key-release-event", self.__on_key_release_event_cb,
         )
+        self.window.connect("realize", self.__on_window_realize_cb)
 
         for scheduler in self.schedulers.values():
             scheduler.start()
 
-        GLib.idle_add(self.__init_canvas, config)
         GLib.idle_add(self.window.set_visible, True)
+        GLib.idle_add(self.switch_mainview, "summary")
 
         self.beacon = beacon.Beacon(config)
         beacon.check_update(self.beacon)
@@ -3159,8 +3204,6 @@ class MainWindow(object):
             'about': Gio.SimpleAction.new("about", None),
             'activate': Gio.SimpleAction.new("activate", None),
             'diagnostic': Gio.SimpleAction.new("diag", None),
-            'export_doc': Gio.SimpleAction.new("export_doc", None),
-            'export_page': Gio.SimpleAction.new("export_page", None),
             'import': Gio.SimpleAction.new("import", None),
             'open_help_introduction': Gio.SimpleAction.new("help.introduction",
                                                            None),
@@ -3169,14 +3212,12 @@ class MainWindow(object):
                                                           None),
             'open_help_hacking': Gio.SimpleAction.new("help.hacking", None),
             'open_settings': Gio.SimpleAction.new("settings", None),
-            'open_doc_dir': Gio.SimpleAction.new("doc_open_dir", None),
             'optimize_index': Gio.SimpleAction.new("optimize_index", None),
-            'print': Gio.SimpleAction.new("print", None),
-            'redo_ocr_doc': Gio.SimpleAction.new("redo_ocr_doc", None),
             'redo_ocr_all': Gio.SimpleAction.new("redo_ocr_all", None),
             'reindex_all': Gio.SimpleAction.new("reindex_all", None),
             'scan_single': Gio.SimpleAction.new("scan_single_page", None),
             'scan_from_feeder': Gio.SimpleAction.new("scan_from_feeder", None),
+            'summary': Gio.SimpleAction.new("summary", None),
             'quit': Gio.SimpleAction.new("quit", None),
         }
         if g_must_init_app:
@@ -3214,77 +3255,12 @@ class MainWindow(object):
         window.set_default_size(config['main_win_size'].value[0],
                                 config['main_win_size'].value[1])
 
-        logo_path = os.path.join(
-            sys.prefix,
-            'share', 'icons', 'hicolor', 'scalable', 'apps',
-            'paperwork_halo.svg'
-        )
-        if os.access(logo_path, os.F_OK):
-            logo = GdkPixbuf.Pixbuf.new_from_file(logo_path)
-            window.set_icon(logo)
+        # before loading the main window, load the icon, so Gtk can access
+        # it too
+        logo_path = preload_file("paperwork_halo.svg")
+        logo = GdkPixbuf.Pixbuf.new_from_file(logo_path)
+        window.set_icon(logo)
         return window
-
-    def __init_canvas(self, config):
-        logo = "paperwork_100.png"
-
-        activated = activation.is_activated(config)
-        expired = activation.has_expired(config)
-
-        if not activated and expired:
-            logo = "bad.png"
-
-        logo_size = (0, 0)
-        try:
-            logo = load_image(logo)
-            logo_size = logo.size
-            logo_drawer = PillowImageDrawer((
-                - (logo_size[0] / 2),
-                - (logo_size[1] / 2) - 12,
-            ), logo)
-            logo_drawer = Centerer(logo_drawer)
-            logo_drawer.layer = logo_drawer.BACKGROUND_LAYER
-            self.img['canvas'].add_drawer(logo_drawer)
-        except Exception as exc:
-            logger.warning("Failed to display logo: {}".format(exc))
-            raise
-
-        update = config['last_update_found'].value
-
-        lines = [
-            ("Paperwork {}".format(__version__), 28),
-        ]
-        if not activated:
-            if expired:
-                lines += [
-                    (_("Trial period has expired"), 30),
-                    (_("Everything will work as usual, except we've"), 24),
-                    (_("switched all the fonts to {}").format(
-                        self.default_font), 24),
-                    (_("until you get an activation key"), 24),
-                    # TODO(Jflesch): Make that a link
-                    (_("You can go to https://openpaper.work/activation/"), 24),
-                    (_("to get an activation key"), 24),
-                ]
-            else:
-                remaining = activation.get_remaining_days(config)
-                lines += [
-                    _("Trial period: {} days remaining").format(remaining), 20
-                ]
-        elif update and update != self.version:
-            lines += [
-                (_("A new version is available:"), 20),
-                (_("Paperwork {}").format(update), 20),
-                # TODO(Jflesch): Make that a link
-                ("https://openpaper.work/download/", 20),
-            ]
-
-        pos = logo_size[1] / 2
-        for (txt, font_size) in lines:
-            txt_drawer = TextDrawer((0, pos), txt, height=font_size)
-            txt_drawer.font = self.default_font
-            txt_drawer = Centerer(txt_drawer)
-            self.img['canvas'].add_drawer(txt_drawer)
-            pos += font_size + 5
 
     def set_search_availability(self, enabled):
         set_widget_state(self.doc_browsing.values(), enabled)
@@ -3369,7 +3345,7 @@ class MainWindow(object):
         label = Label(name=_("Documentation"), color="#ffffffffffff")
         job_importer.connect(
             'import-ok',
-            lambda _, stats, doc: GLib.idle_add(
+            lambda _, stats, doc, uris: GLib.idle_add(
                 set_labels, doc, [label]
             )
         )
@@ -3413,13 +3389,41 @@ class MainWindow(object):
         )
         self.doclist.clear()
 
+    def switch_mainview(self, to):
+        if to == self.active_view:
+            return
+        if to == "summary":
+            self.global_page_box.remove(self.img['scrollbar'])
+            self.global_page_box.pack_end(self.summary['view'], True, True, 0)
+        elif to == "content":
+            self.global_page_box.remove(self.summary['view'])
+            self.global_page_box.pack_end(self.img['scrollbar'], True, True, 0)
+        else:
+            assert False, "Unknown main view requested"
+        self.active_view = to
+
     def switch_leftpane(self, to):
         for (name, revealers) in self.left_revealers.items():
             visible = (to == name)
-            for revealer in revealers:
-                if visible:
-                    revealer.set_visible(visible)
+            for (parent, position, revealer) in revealers:
+                if parent is not None:
+                    is_visible = revealer in parent.get_children()
+                    if visible and not is_visible:
+                        parent.add(revealer)
+                    elif not visible and is_visible:
+                        # WORKAROUND(Jflesch):
+                        # We remove the GtkRevealers. It reduces the amount
+                        # of warnings of Gtk about GtkRevealers size
+                        # and it forces a redraw avoiding some other issues.
+                        # Remove only after transition
+                        if os.name == "nt":
+                            parent.remove(revealer)
+                        else:
+                            GLib.timeout_add(500, parent.remove, revealer)
+                    if visible:
+                        parent.reorder_child(revealer, position)
                 revealer.set_reveal_child(visible)
+        self.search_box.set_visible(to != 'doc_properties')
 
     def on_search_results_cb(self, search, documents):
         logger.info("Got {} documents".format(len(documents)))
@@ -3624,6 +3628,11 @@ class MainWindow(object):
 
         return (True, force_refresh)
 
+    def update_recent(self):
+        self.__config['last_documents'].push(self.doc.docid)
+        search = self.search_field.get_text()
+        self.__config['last_searches'].push(search)
+
     def _show_pages(self, doc):
         if not self.page or self.page.doc.docid != doc.docid:
             if doc.nb_pages > 0:
@@ -3652,8 +3661,7 @@ class MainWindow(object):
 
     def _show_doc_internal(self, doc, force_refresh=False):
         # Make sure we display the same instance of the document than the
-        # one in the backend. Not a copy (unless there is no instance in the
-        # backend)
+        # one in the backend.
         # This is required to workaround some issues regarding caching
         # in the backend
         doc_inst = self.docsearch.get_doc_from_docid(doc.docid, inst=False)
@@ -3675,8 +3683,6 @@ class MainWindow(object):
 
         logger.info("Showing document {}".format(doc))
 
-        if self.doc and self.doc.docid != doc.docid:
-            self.doc.drop_cache()
         gc.collect()
 
         self.doc = doc
@@ -3693,6 +3699,8 @@ class MainWindow(object):
 
         self.doclist.set_selected_doc(self.doc)
         self.doc_properties_panel.set_doc(self.doc)
+        self.update_recent()
+        self.switch_mainview("content")
 
     def _show_doc_hook(self, doc, force_refresh=False):
         try:
@@ -3796,7 +3804,6 @@ class MainWindow(object):
     def refresh_label_list(self):
         # make sure the correct doc is taken into account
         self.doc_properties_panel.set_doc(self.doc)
-        self.doc_properties_panel.refresh_label_list()
 
     def on_export_preview_start(self):
         visible = self.img['canvas'].visible_size
@@ -3914,6 +3921,11 @@ class MainWindow(object):
     def __on_window_resized_cb(self, _, rectangle):
         (w, h) = (rectangle.width, rectangle.height)
         self.__config['main_win_size'].value = (w, h)
+
+    def __on_window_realize_cb(self, _):
+        action = 'reindex' if self.workdir_scan_at_start else 'reload'
+        self.workdir_scan_at_start = False
+        GLib.idle_add(self.actions[action][1].do)
 
     def __set_zoom_level_on_scroll(self, zoom):
         logger.info("Changing zoom level (scroll): %f"
@@ -4068,8 +4080,6 @@ class MainWindow(object):
                 doc = self.doclist.get_new_doc()
 
         doc.add_page(img, line_boxes)
-        doc.drop_cache()
-        self.doc.drop_cache()
 
         if self.doc.docid == doc.docid:
             self.show_page(self.doc.pages[-1], force_refresh=True)
@@ -4144,14 +4154,14 @@ class MainWindow(object):
     def on_export_done(self, exporter):
         self.set_mouse_cursor("Normal")
         self.set_progression(None, 0.0, None)
-        notification = Notify.Notification.new(
-            _("Export finished"),
-            _("Export of {} as {} finished").format(
+        show_msg(
+            parent=self.window,
+            title=_("Export finished"),
+            msg=_("Export of {} as {} finished").format(
                 str(exporter.obj), str(exporter.export_format)
             ),
-            "document-save"
+            notify_type="document-save"
         )
-        notification.show()
 
     def on_export_error(self, exporter, error):
         self.set_mouse_cursor("Normal")

@@ -10,7 +10,7 @@
     <property name="destroy_with_parent">True</property>
     <property name="type_hint">dialog</property>
     <property name="program_name">Paperwork</property>
-    <property name="version">1.2-git</property>
+    <property name="version">1.3-git</property>
     <property name="copyright" translatable="yes">
 </property>
     <property name="comments" translatable="yes">Grep for Dead Trees</property>
@@ -728,7 +728,7 @@ Samuel Dorsaz &lt;ajira86@hotmail.com&gt; (1)
 Santiago Castro &lt;bryant@montevideo.com.uy&gt; (1)
 swap38 &lt;swap38@no-log.org&gt; (1)
     </property>
-    <property name="logo">paperwork</property>
+    <property name="logo">paperwork.svg</property>
     <property name="license_type">gpl-3-0</property>
     <child internal-child="vbox">
       <object class="GtkBox" id="dialog-vbox1">

@@ -19,11 +19,11 @@ on Help->About)
 """
 
 import os
-import sys
 
 from gi.repository import GdkPixbuf
 
 from paperwork.frontend.util import load_uifile
+from paperwork.frontend.util import preload_file
 
 
 class AboutDialog(object):
@@ -35,19 +35,17 @@ class AboutDialog(object):
     AboutDialog.show().
     """
 
-    def __init__(self, main_window):
+    def __init__(self, main_window, version):
+        logo_path = preload_file("paperwork.svg")
         self.__widget_tree = load_uifile(
             os.path.join("aboutdialog", "aboutdialog.glade"))
 
         self.__dialog = self.__widget_tree.get_object("aboutdialog")
         assert(self.__dialog)
         self.__dialog.set_transient_for(main_window)
+        self.__dialog.set_version(version)
 
-        logo_path = os.path.join(
-            sys.prefix, 'share', 'icons', 'hicolor', 'scalable', 'apps',
-            'paperwork.svg'
-        )
-        if os.access(logo_path, os.F_OK):
+        if logo_path and os.access(logo_path, os.F_OK):
             logo = GdkPixbuf.Pixbuf.new_from_file(logo_path)
             self.__dialog.set_logo(logo)
         self.__dialog.connect("response", lambda x, y: x.destroy())
