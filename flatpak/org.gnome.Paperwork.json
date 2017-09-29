@@ -145,8 +145,8 @@
             "sources": [
 				{
 					"type": "archive",
-					"url": "https://pypi.python.org/packages/89/02/d516f6676ce668626275207e1bb4567404c900854157ea2d1b9b1f2bc2b6/pyinsane2-2.0.9.tar.gz",
-					"sha256": "879cecc7679acac0129b5e3e297236197cbd6991a89faa6dadfae89ce10f8abc"
+                    "url": "https://pypi.python.org/packages/46/8e/689a14dfe008cc5aa51b7f56ff41d6ab9fe27b77b3f234594e9360ebdd1f/pyinsane2-2.0.10.tar.gz",
+                    "sha256": "72dcf8663b81e5fb77a1a520fca349998aac166e9537b17a0e76253e16e6a101"
 				},
 				{
 					"type": "file",
@@ -156,6 +156,23 @@
 			]
         },
 		{
+            "name" :"python-sane",
+            "no-autogen": true,
+            "ensure-writable": ["/lib/python*/site-packages/easy-install.pth"],
+            "sources": [
+				{
+					"type": "archive",
+                    "url": "https://pypi.python.org/packages/89/cf/a62e1416c18b0facc508c2ce4c0c77701154febc005ae8fdbfb65112755f/python-sane-2.8.2.tar.gz",
+                    "sha256": "0f47e1c34ca94dcbe3136a05f05b342f055e6c129743f7f6e1a6519d6000316b"
+				},
+				{
+					"type": "file",
+					"path": "pip-Makefile",
+					"dest-filename": "Makefile"
+				}
+			]
+        },
+        {
             "name" :"pyocr",
             "no-autogen": true,
             "ensure-writable": ["/lib/python*/site-packages/easy-install.pth"],
@@ -212,9 +229,10 @@
             "ensure-writable": ["/lib/python*/site-packages/easy-install.pth","/lib/python*/site-packages/setuptools.pth"],
             "sources": [
 				{
-					"type": "archive",
-					"url": "https://github.com/openpaperwork/paperwork-backend/archive/unstable.zip",
-					"sha256": "62cc81d7ff75a19a75f19339b5fb51a052a227bdf61b9b8d0365fc4d3a311b46"
+					"type": "git",
+					"url": "https://github.com/openpaperwork/paperwork-backend/",
+					"branch": "unstable",
+					"commit": "6a5cbf43ff7455c4c109fdb8043b5bf79a985d50"
 				},
 				{
 					"type": "file",
@@ -361,9 +379,10 @@
 			"post-install": ["paperwork-shell install"],
 			"sources": [
 				{
-					"type": "archive",
-					"url": "https://github.com/openpaperwork/paperwork/archive/unstable.zip",
-					"sha256": "7d884755c089b9b6edc881c3e26b853cd6ccebb063c5a1eb0f822b622aa354e6"
+					"type": "git",
+					"url": "https://github.com/openpaperwork/paperwork/",
+					"branch": "unstable",
+					"commit": "5ab090ca9c31fe649e17c6204ed98bb6306634f6"
 				},
 			        {
 				        "type": "file",
