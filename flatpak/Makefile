@@ -1,6 +1,6 @@
 REPO = repo
 APP = $(patsubst %.json,%,$(wildcard *.json))
-VER = 1.1.12
+VER = stable
 
 all: app
 build: app
@@ -13,12 +13,12 @@ uninstall:
 	@flatpak --user uninstall $(APP)
 
 install: build
-	@flatpak --user install --bundle $(APP:%=%.bundle)
+	@flatpak --user install --bundle $(APP:%=%.flatpak)
 
 reinstall: uninstall install
 
 clean:
-	@rm -rf app repo .flatpak-builder $(APP:%=%.bundle)
+	@rm -rf app repo .flatpak-builder $(APP:%=%.flatpak)
 
 
 %: %.json
