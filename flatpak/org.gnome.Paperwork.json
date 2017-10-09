@@ -156,6 +156,23 @@
 			]
         },
 		{
+            "name" :"python-sane-devel",
+            "no-autogen": true,
+            "ensure-writable": ["/lib/python*/site-packages/easy-install.pth"],
+            "sources": [
+				{
+					"type": "archive",
+                    "url": "https://pypi.python.org/packages/89/cf/a62e1416c18b0facc508c2ce4c0c77701154febc005ae8fdbfb65112755f/python-sane-2.8.2.tar.gz",
+                    "sha256": "0f47e1c34ca94dcbe3136a05f05b342f055e6c129743f7f6e1a6519d6000316b"
+				},
+				{
+					"type": "file",
+					"path": "pip-Makefile",
+					"dest-filename": "Makefile"
+				}
+			]
+        },
+        {
             "name" :"python-sane",
             "no-autogen": true,
             "ensure-writable": ["/lib/python*/site-packages/easy-install.pth"],
@@ -382,7 +399,7 @@
 					"type": "git",
 					"url": "https://github.com/openpaperwork/paperwork/",
 					"branch": "unstable",
-					"commit": "5ab090ca9c31fe649e17c6204ed98bb6306634f6"
+					"commit": "5803c81f9174375f0e4f22a4e504db0cc076b7ff"
 				},
 			        {
 				        "type": "file",
